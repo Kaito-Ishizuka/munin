@@ -1,0 +1,164 @@
+function onOpen() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var menuItems = [
+    {name: '一覧表入力', functionName: 'setInputValue'},
+    {name: 'PDF作成', functionName: 'sheetToPdf'},
+    {name: 'PDF送信', functionName: 'sendPdfByEmail'}
+  ];
+  spreadsheet.addMenu('自動実行', menuItems);
+}
+function setInputValue() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  var dataSheet = ss.getSheetByName('データ反映用');
+  var targetValue = dataSheet.getRange('B1').getValue();
+  
+  // 4行目の値がtargetValueと一致する列を探す
+  var rowValues = sheet.getRange(4, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var activeColumn = rowValues.indexOf(targetValue) + 1;
+  
+  if (activeColumn === 0) {
+    Logger.log("The value in 'データ反映用'!B2 was not found in the 4th row of the current sheet.");
+    return;
+  }
+
+  // 5行目の数式の結果を値として入力
+  applyFormulaToRow(5, activeColumn, "$G:$G");
+  
+  // 6行目の数式の結果を値として入力
+  applyFormulaToRow(6, activeColumn, "$H:$H");
+  
+  // 19行目の数式の結果を値として入力
+  applyFormulaToRow(19, activeColumn, "$M:$M");
+  
+  // 31行目の数式の結果を値として入力
+  applyFormulaToRow(31, activeColumn, "$B:$B");
+}
+
+// 指定した行に数式を適用し、結果を値としてセットする関数
+function applyFormulaToRow(row, activeColumn, range) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  
+  var formula = "=IF(" + columnToLetter(activeColumn) + "$4='データ反映用'!$B$1,FILTER('データ反映用'!" + range + ",'データ反映用'!$A:$A=$I$2),)";
+  var resultValue = sheet.getRange(row, activeColumn).setFormula(formula).getValue();
+  sheet.getRange(row, activeColumn).setValue(resultValue);
+}
+
+// 数値の列番号をアルファベットの列文字に変換する補助関数
+function columnToLetter(column) {
+  var temp, letter = '';
+  while (column > 0) {
+    temp = (column - 1) % 26;
+    letter = String.fromCharCode(temp + 65) + letter;
+    column = (column - temp - 1) / 26;
+  }
+  return letter;
+}
+
+
+
+function sheetToPdf() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 「給与明細書」シートの取得
+  var sheet = spreadsheet.getSheetByName('給与明細書');
+  
+  // 従業員Noの取得
+  var employeeNo = sheet.getRange('C5').getValue();
+  
+  // 「従業員名簿」シートから従業員Noに対応するメールアドレスを検索
+  var employeeRosterSheet = spreadsheet.getSheetByName('従業員名簿');
+  var lastRow = employeeRosterSheet.getLastRow();
+  var employeeNos = employeeRosterSheet.getRange(1, 1, lastRow).getValues(); // A列
+  var email = ''; // 初期値
+  var name = ''; // 初期値
+  for(var i = 0; i < lastRow; i++) {
+    if(employeeNos[i][0] == employeeNo) {
+      email = employeeRosterSheet.getRange(i + 1, 3).getValue(); // C列
+      break;
+    }
+  }
+
+  for(var i = 0; i < lastRow; i++) {
+    if(employeeNos[i][0] == employeeNo) {
+      name = employeeRosterSheet.getRange(i + 1, 2).getValue(); // B列
+      break;
+    }
+  }
+  // シートをPDFとしてエクスポート
+  var url = 'https://docs.google.com/spreadsheets/d/' + spreadsheet.getId() + '/export?';
+  var params = {
+    exportFormat: 'pdf',
+    format: 'pdf',
+    size: 'letter',
+    portrait: true,
+    fitw: true,
+    sheetnames: false,
+    printtitle: false,
+    pagenum: 'UNDEFINED',
+    gridlines: false,
+    fzr: false,
+    gid: sheet.getSheetId()
+  };
+  var response = UrlFetchApp.fetch(url + encodeURI(Object.keys(params).map(function(key) { return key + '=' + params[key]; }).join('&')), {
+    headers: {
+      'Authorization': 'Bearer ' + ScriptApp.getOAuthToken()
+    },
+    muteHttpExceptions: true
+  });
+  
+  // PDFを指定されたGoogleドライブのフォルダに保存
+  var folderId = '1LhhJnjRfyBubWPEOyhDilksIb4ECsOna'; // 指定のフォルダID
+  var folder = DriveApp.getFolderById(folderId); // フォルダの取得
+  var blob = response.getBlob().setName(sheet.getName() + '.pdf');
+  var file = folder.createFile(blob);
+  
+  // 現在の日時を取得
+  var now = new Date();
+  var formattedDate = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
+  
+  // 保存したPDFのIDと作成日時を「シートA」に入力
+  var sheetA = spreadsheet.getSheetByName('PDF送信用');
+  var lastRow = sheetA.getLastRow(); // A列またはB列の最終行を取得
+  var targetRow = lastRow + 1; // 最終行の次の行を取得
+  sheetA.getRange(targetRow, 1).setValue(file.getId()); // A列にファイルIDを入力
+  sheetA.getRange(targetRow, 2).setValue(formattedDate); // B列に作成日時を入力
+
+      // 「シートA」にメールアドレスと他の情報を反映
+  sheetA.getRange(targetRow, 3).setValue(name); // C列に氏名を反映
+  sheetA.getRange(targetRow, 4).setValue(email); // D列にメールアドレスを反映
+}
+function sendPdfByEmail() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetA = spreadsheet.getSheetByName('PDF送信用');
+  
+  // シートAのデータを取得
+  var range = sheetA.getRange(1, 1, sheetA.getLastRow(), 5); // 1行目から最終行まで、1列目から5列目まで
+  var values = range.getValues();
+  
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var fileId = row[0]; // A列のデータ (ファイルID)
+    var name = row[2];  // C列のデータ (氏名)
+    var email = row[3]; // D列のデータ (メールアドレス)
+    var status = row[4]; // E列のデータ (送信ステータス)
+    
+    // メールの件名と本文
+    var subject = `${name}様、明細書の共有になります`;
+    var body = `${name}様\n\n添付ファイルをご確認ください。`;
+    
+    if (fileId && email && status !== '送信済') {
+      try {
+        var file = DriveApp.getFileById(fileId); // ファイルIDに基づいてGoogleドライブからファイルを取得
+        GmailApp.sendEmail(email, subject, body, {
+          attachments: [file.getAs(MimeType.PDF)] // ファイルをPDFとして添付
+        });
+        sheetA.getRange(i + 1, 5).setValue('送信済'); // E列に「送信済」を記入
+      } catch (e) {
+        // エラーハンドリング (例: ファイルIDが不正な場合やメールアドレスが不正な場合)
+        console.error('Row ' + (i + 1) + ': ' + e.toString());
+      }
+    }
+  }
+}
