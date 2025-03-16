@@ -620,8 +620,8 @@ function outputResults(groupedMembers, startDate, execDate) {
   // 新しいタブを作成
   let resultSheet = ss.insertSheet(tabName);
   
-  // ヘッダー行の設定
-  const headers = ["グループ名", "氏名", "会員番号", "クラス", "年代", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望時間帯", "第二希望時間帯", "割当時間帯"];
+  // ヘッダー行の設定 - 「割当時間帯」を削除
+  const headers = ["グループ名", "氏名", "会員番号", "クラス", "年代", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望時間帯", "第二希望時間帯"];
   resultSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   
   // 実行情報の設定
@@ -670,8 +670,8 @@ function outputResults(groupedMembers, startDate, execDate) {
         member.skillGroup || "",
         member.specialType || "",
         member.preferredTime || "",
-        member.secondPreferredTime || "",
-        member.assignedTimeSlot || ""
+        member.secondPreferredTime || ""
+        // 「割当時間帯」の列を削除
       ]);
     });
   });
@@ -689,7 +689,6 @@ function outputResults(groupedMembers, startDate, execDate) {
   
   return tabName;
 }
-
 /**
  * 処理完了通知メールを送信する関数
  * @param {Date} startDate 処理対象の年月
