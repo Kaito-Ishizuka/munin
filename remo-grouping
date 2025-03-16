@@ -89,7 +89,7 @@ function main() {
     }
     
     // グループ分け処理
-    const edMembers = groupMembers(memberData);
+    const groupedMembers = groupMembers(memberData);
     
     // 結果の出力
     const tabName = outputResults(groupedMembers, startDate, execDate);
@@ -427,7 +427,7 @@ function findBestMemberToMove(sourceGroup, targetGroup) {
  */
 function groupMembers(memberData) {
   // グループを格納するオブジェクト
-  const groups = {};
+  const groupedMembers = {};
   
   // グループのサイズ制限
   const minMembersPerGroup = 4;
@@ -611,7 +611,7 @@ function groupMembers(memberData) {
   // 結果の確認
   if (Object.keys(finalGroups).length === 0) {
     // グループが作成されなかった場合、全員を1つのグループに
-    groups["デフォルトグループ"] = memberData;
+    groupedMembers["デフォルトグループ"] = memberData;
     memberData.forEach(member => {
       member.group = "デフォルトグループ";
       member.assignedTimeSlot = "未指定";
@@ -620,12 +620,12 @@ function groupMembers(memberData) {
     // 最終的なグループを設定
     Object.keys(finalGroups).forEach(key => {
       if (finalGroups[key] && finalGroups[key].length > 0) {
-        groups[key] = finalGroups[key];
+        groupedMembers[key] = finalGroups[key];
       }
     });
   }
   
-  return groups;
+  return groupedMembers;
 }
 
 /**
