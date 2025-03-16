@@ -89,7 +89,7 @@ function main() {
     }
     
     // グループ分け処理
-    const groupedMembers = groupMembers(memberData);
+    const edMembers = groupMembers(memberData);
     
     // 結果の出力
     const tabName = outputResults(groupedMembers, startDate, execDate);
@@ -445,6 +445,8 @@ function groupMembers(memberData) {
     member.skillGroup = skillResult.group;
     member.specialType = skillResult.specialType;
     member.skillDetails = skillResult.skills;
+    // 割当済みフラグを追加
+    member.assigned = false;
   });
   
   // ===== ステップ2: すべての希望時間帯（第一・第二）を収集 =====
@@ -463,21 +465,84 @@ function groupMembers(memberData) {
     Logger.log("警告: 有効な時間帯が見つかりませんでした。「未指定」を使用します。");
   }
   
-  // ===== ステップ3: 各時間帯に対して適合するメンバーを特定 =====
+  // ===== ステップ3: まず第一希望に基づいてメンバーを割り当て =====
   const timeGroups = {};
   const timeGroupNames = {};
   
   timeSlots.forEach((time, index) => {
-    // 第一希望または第二希望が一致するメンバーを抽出
-    const fitMembers = memberData.filter(member => 
-      member.preferredTime === time || member.secondPreferredTime === time
+    timeGroupNames[time] = `グループ${index + 1}`;
+    
+    // 第一希望が一致し、まだ割り当てられていないメンバーを抽出
+    const primaryMembers = memberData.filter(member => 
+      member.preferredTime === time && !member.assigned
     );
     
-    timeGroups[time] = fitMembers;
-    timeGroupNames[time] = `グループ${index + 1}`;
+    timeGroups[time] = [...primaryMembers];
+    
+    // 割り当て済みフラグをセット
+    primaryMembers.forEach(member => {
+      member.assigned = true;
+      member.assignedTimeSlot = time;
+    });
   });
   
-  // ===== ステップ4: 各時間帯のグループをさらに分割してスキルバランスを取る =====
+  // ===== ステップ4: 次に第二希望に基づいて未割当メンバーを割り当て =====
+  timeSlots.forEach(time => {
+    // 第二希望が一致し、まだ割り当てられていないメンバーを抽出
+    const secondaryMembers = memberData.filter(member => 
+      member.secondPreferredTime === time && !member.assigned
+    );
+    
+    // 既存のグループに追加
+    if (secondaryMembers.length > 0) {
+      timeGroups[time] = [...timeGroups[time], ...secondaryMembers];
+      
+      // 割り当て済みフラグをセット
+      secondaryMembers.forEach(member => {
+        member.assigned = true;
+        member.assignedTimeSlot = time;
+      });
+    }
+  });
+  
+  // ===== ステップ5: それでも未割当のメンバーを適切なグループに割り当て =====
+  const unassignedMembers = memberData.filter(member => !member.assigned);
+  
+  if (unassignedMembers.length > 0) {
+    // 人数が最も少ないグループを探す
+    let smallestGroup = "";
+    let smallestSize = Infinity;
+    
+    Object.keys(timeGroups).forEach(time => {
+      if (timeGroups[time].length < smallestSize) {
+        smallestSize = timeGroups[time].length;
+        smallestGroup = time;
+      }
+    });
+    
+    // 未割当メンバーを最も小さいグループに追加
+    if (smallestGroup) {
+      timeGroups[smallestGroup] = [...timeGroups[smallestGroup], ...unassignedMembers];
+      
+      // 割り当て済みフラグをセット
+      unassignedMembers.forEach(member => {
+        member.assigned = true;
+        member.assignedTimeSlot = smallestGroup;
+      });
+    } else {
+      // グループがまだ一つも作られていない場合、新しいグループを作成
+      const defaultTime = "未割当";
+      timeGroups[defaultTime] = [...unassignedMembers];
+      timeGroupNames[defaultTime] = "未割当グループ";
+      
+      unassignedMembers.forEach(member => {
+        member.assigned = true;
+        member.assignedTimeSlot = defaultTime;
+      });
+    }
+  }
+  
+  // ===== ステップ6: 各時間帯のグループをさらに分割してスキルバランスを取る =====
   const finalGroups = {};
   
   Object.keys(timeGroups).forEach(time => {
@@ -490,7 +555,6 @@ function groupMembers(memberData) {
       // メンバーのグループ情報を更新
       members.forEach(member => {
         member.group = timeGroupNames[time];
-        member.assignedTimeSlot = time;
       });
     } else if (members.length > maxMembersPerGroup) {
       // グループをさらに分割する必要がある場合
@@ -531,41 +595,16 @@ function groupMembers(memberData) {
         // メンバーのグループ情報を更新
         subgroups[i].forEach(member => {
           member.group = subgroupName;
-          member.assignedTimeSlot = time;
         });
       }
     } else if (members.length > 0 && members.length < minMembersPerGroup) {
-      // 最小人数に満たない場合、他の時間帯のグループと統合するか検討
-      let foundGroup = false;
+      // 最小人数に満たない場合、そのまま一つのグループにする
+      const groupName = timeGroupNames[time];
+      finalGroups[groupName] = members;
       
-      // 第二希望に基づいて他の時間帯のグループに再配置
       members.forEach(member => {
-        if (member.secondPreferredTime && timeGroups[member.secondPreferredTime]) {
-          const targetGroup = Object.keys(finalGroups).find(groupName => {
-            return finalGroups[groupName].some(m => m.assignedTimeSlot === member.secondPreferredTime) &&
-                   finalGroups[groupName].length < maxMembersPerGroup;
-          });
-          
-          if (targetGroup) {
-            finalGroups[targetGroup].push(member);
-            member.group = targetGroup;
-            member.assignedTimeSlot = member.secondPreferredTime;
-            foundGroup = true;
-          }
-        }
+        member.group = groupName;
       });
-      
-      // それでも配置できないメンバーのためのグループを作成
-      const remainingMembers = members.filter(member => !member.group);
-      if (remainingMembers.length > 0) {
-        const remainingGroupName = `グループ補欠-${time}`;
-        finalGroups[remainingGroupName] = remainingMembers;
-        
-        remainingMembers.forEach(member => {
-          member.group = remainingGroupName;
-          member.assignedTimeSlot = time;
-        });
-      }
     }
   });
   
