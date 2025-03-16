@@ -1,0 +1,775 @@
+/**
+ * スプレッドシートが開かれたときに実行される関数
+ * カスタムメニューを追加する
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  
+  // カスタムメニューを作成
+  ui.createMenu('自動処理')
+    .addItem('グループ分け実行', 'main')
+    .addSeparator()
+    .addItem('ヘルプ', 'showHelp')
+    .addToUi();
+}
+
+/**
+ * ヘルプ情報を表示する関数
+ */
+function showHelp() {
+  const ui = SpreadsheetApp.getUi();
+  const helpText = 
+    "「グループ分け実行」を選択すると、次の処理が実行されます：\n\n" +
+    "1. 開始年月（yyyy/mm形式）の入力を求められます\n" +
+    "2. 指定した年月に一致するCamp開始日のメンバーを抽出\n" +
+    "3. 時間帯の希望とPCスキルの類似性を考慮してグループ分け\n" +
+    "4. 結果を新しいタブに出力\n" +
+    "5. 処理完了メールを担当者に送信\n\n" +
+    "※ グループ分けは以下の基準で行われます：\n" +
+    "- 第一希望または第二希望の時間帯が共通のメンバーを同じグループに\n" +
+    "- 同様のPCスキルレベルのメンバーを同じグループに\n" +
+    "- 一つのグループあたり最少4名、最大6名まで";
+  
+  ui.alert('グループ分けツールのヘルプ', helpText, ui.ButtonSet.OK);
+}
+
+/**
+ * メインの実行関数
+ * この関数がスクリプトエディタまたはメニューから実行されるエントリーポイント
+ */
+function main() {
+  try {
+    // ユーザーから開始年月を取得
+    const startDate = getUserInput();
+    if (!startDate) return; // ユーザーがキャンセルした場合、処理を中止
+    
+    // 実行日時
+    const execDate = new Date();
+    
+    // 会員名簿シートを取得
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName("会員名簿");
+    
+    if (!sheet) {
+      throw new Error("「会員名簿」シートが見つかりません。シート名を確認してください。");
+    }
+    
+    // データ範囲とヘッダー行を取得
+    const dataRange = sheet.getDataRange();
+    const values = dataRange.getValues();
+    const headers = values[0];
+    
+    // カラムのインデックスを取得（代替名も考慮）
+    const columnIndices = {
+      campStartDate: getColumnIndexWithAlternatives(headers, "Camp開始日", ["キャンプ開始日", "camp開始日"]),
+      name: getColumnIndexWithAlternatives(headers, "氏名", ["名前", "フルネーム"]),
+      memberNumber: getColumnIndexWithAlternatives(headers, "会員番号", ["メンバー番号", "ID"]),
+      class: getColumnIndexWithAlternatives(headers, "クラス", ["会員クラス", "メンバークラス"]),
+      pcSkills: getColumnIndexWithAlternatives(headers, "PCスキル", ["パソコンスキル", "PC経験"]),
+      preferredTime: getColumnIndexWithAlternatives(headers, "第一希望時間帯", ["第一希望", "希望時間1", "第１希望"]),
+      secondPreferredTime: getColumnIndexWithAlternatives(headers, "第二希望時間帯", ["第二希望", "希望時間2", "第２希望"]),
+      ageGroup: getColumnIndexWithAlternatives(headers, "年代", ["年齢層", "年齢"])
+    };
+    
+    // 必要なカラムが存在するか確認
+    const missingColumns = Object.entries(columnIndices)
+      .filter(([key, value]) => value === -1 && key !== 'ageGroup' && key !== 'secondPreferredTime') // 年代と第二希望は任意
+      .map(([key, value]) => key);
+    
+    if (missingColumns.length > 0) {
+      throw new Error("必要なカラムが見つかりません: " + missingColumns.join(", "));
+    }
+    
+    // データの取得と処理
+    const memberData = getMemberData(values, columnIndices, startDate);
+    
+    if (memberData.length === 0) {
+      Browser.msgBox("対象データがありません", "指定した年月 (" + startDate.getFullYear() + "/" + (startDate.getMonth() + 1) + ") に該当するデータが見つかりませんでした。", Browser.Buttons.OK);
+      return;
+    }
+    
+    // グループ分け処理
+    const groupedMembers = groupMembers(memberData);
+    
+    // 結果の出力
+    const tabName = outputResults(groupedMembers, startDate, execDate);
+    
+    // 完了通知メールの送信
+    sendNotificationEmail(startDate, memberData.length, groupedMembers, tabName);
+    
+    // 完了メッセージ
+    Browser.msgBox("処理完了", "グループ分けが完了しました。結果は「" + tabName + "」タブに出力されています。", Browser.Buttons.OK);
+  } catch (error) {
+    // エラー処理
+    Browser.msgBox("エラーが発生しました", error.toString(), Browser.Buttons.OK);
+    Logger.log(error);
+    
+    // エラー通知メールの送信
+    sendErrorEmail(error);
+  }
+}
+
+/**
+ * カラムのインデックスを取得する関数
+ * 複数の可能性のある名前を考慮して検索する
+ * @param {Array} headers ヘッダー行の配列
+ * @param {String} columnName 取得したい列の名前
+ * @param {Array} alternativeNames 代替となる列名の配列
+ * @return {Number} インデックス（0から始まる）、見つからない場合は-1
+ */
+function getColumnIndexWithAlternatives(headers, columnName, alternativeNames = []) {
+  // まず完全一致で検索
+  let index = headers.findIndex(header => 
+    header === columnName || 
+    header.toString().toLowerCase() === columnName.toLowerCase()
+  );
+  
+  // 見つからない場合、代替名で検索
+  if (index === -1 && alternativeNames.length > 0) {
+    for (const altName of alternativeNames) {
+      index = headers.findIndex(header => 
+        header === altName || 
+        header.toString().toLowerCase() === altName.toLowerCase()
+      );
+      if (index !== -1) break;
+    }
+  }
+  
+  return index;
+}
+
+/**
+ * ユーザーから開始年月を取得する関数
+ * @return {Date} 入力された年月の Date オブジェクト
+ */
+function getUserInput() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    "開始年月の入力",
+    "グループ分けの対象となる開始年月を入力してください（yyyy/mm形式）:",
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  // ユーザーの入力に応じた処理
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const inputText = response.getResponseText().trim();
+    // yyyy/mm形式かどうかのチェック
+    const datePattern = /^(\d{4})\/(\d{1,2})$/;
+    const match = inputText.match(datePattern);
+    
+    if (match) {
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]) - 1; // JavaScriptの月は0から始まる
+      
+      // 有効な日付範囲かチェック
+      if (year >= 1900 && year <= 2100 && month >= 0 && month <= 11) {
+        return new Date(year, month, 1); // 月の1日を返す
+      }
+    }
+    
+    // 無効な入力の場合は再度入力を求める
+    Browser.msgBox("入力エラー", "yyyy/mm形式で有効な年月を入力してください。", Browser.Buttons.OK);
+    return getUserInput(); // 再帰的に呼び出し
+  } else {
+    // キャンセルの場合
+    return null;
+  }
+}
+
+/**
+ * 会員データを取得し、指定した年月に一致するデータを抽出する関数
+ * @param {Array} values スプレッドシートの全データ
+ * @param {Object} columnIndices 各カラムのインデックスを格納したオブジェクト
+ * @param {Date} startDate 抽出基準となる年月の Date オブジェクト
+ * @return {Array} 抽出されたデータの配列
+ */
+function getMemberData(values, columnIndices, startDate) {
+  // 指定した年月に一致するデータを抽出
+  const targetData = [];
+  
+  for (let i = 1; i < values.length; i++) { // ヘッダー行をスキップ
+    const row = values[i];
+    const campStartDate = row[columnIndices.campStartDate];
+    
+    // Camp開始日が有効な日付かつ指定した年月に一致するか確認
+    if (campStartDate instanceof Date && !isNaN(campStartDate.getTime()) &&
+        campStartDate.getFullYear() === startDate.getFullYear() &&
+        campStartDate.getMonth() === startDate.getMonth()) {
+      
+      // 年代の取得（シートから直接取得）
+      const ageGroup = columnIndices.ageGroup !== -1 ? row[columnIndices.ageGroup] || "不明" : getAgeGroup(row);
+      
+      // 抽出するデータを整形
+      targetData.push({
+        name: row[columnIndices.name] || "",
+        memberNumber: row[columnIndices.memberNumber] || "",
+        class: row[columnIndices.class] || "",
+        campStartDate: campStartDate,
+        pcSkills: row[columnIndices.pcSkills] || "",
+        preferredTime: row[columnIndices.preferredTime] || "",
+        secondPreferredTime: columnIndices.secondPreferredTime !== -1 ? row[columnIndices.secondPreferredTime] || "" : "",
+        ageGroup: ageGroup,
+        group: null, // グループ分け結果を格納するためのプロパティ
+        skillScore: 0, // PCスキルスコア（初期値）
+        skillGroup: "", // PCスキルグループ（初期値）
+        specialType: null, // 特別なスキルタイプ（初期値）
+        skillDetails: [] // スキル詳細（初期値）
+      });
+    }
+  }
+  
+  return targetData;
+}
+
+/**
+ * PCスキルに基づいてスコアリングとグループ分けを行う関数
+ * @param {String} skillText PCスキルのテキスト
+ * @return {Object} スコアとグループ情報を含むオブジェクト
+ */
+function scorePCSkills(skillText) {
+  if (!skillText) return { score: 0, group: "初心者", specialType: null, skills: [] };
+  
+  // スキルを配列に変換（カンマまたは改行で区切られている可能性がある）
+  const skills = skillText.split(/[,\n]/).map(skill => skill.trim()).filter(s => s);
+  
+  // スキルごとの点数配分
+  const skillScores = {
+    "パソコンを持っていない": -10,
+    "日常的にほとんど使っていない": -5,
+    "Webサイトを閲覧している": 1,
+    "ブラインドタッチができる": 3,
+    "スプレッドシートの理解がある程度ある": 5,
+    "Canvaをある程度使っている": 7,
+    "短い動画の編集ができる": 8
+  };
+  
+  // スコア範囲とグループの定義
+  const groupDefinitions = [
+    { min: -999, max: 0, name: "非PCユーザー" },
+    { min: 1, max: 4, name: "初心者" },
+    { min: 5, max: 10, name: "中級者" },
+    { min: 11, max: 999, name: "上級者" }
+  ];
+  
+  // 特殊ケース: PCを持っていない場合は他のスキルを無視
+  if (skills.some(skill => skill.includes("パソコンを持っていない"))) {
+    return {
+      score: skillScores["パソコンを持っていない"],
+      group: "非PCユーザー",
+      specialType: null,
+      skills: ["パソコンを持っていない"]
+    };
+  }
+  
+  // スコア計算
+  let totalScore = 0;
+  skills.forEach(skill => {
+    // 完全一致のスキルを探す
+    const exactMatch = Object.keys(skillScores).find(key => key === skill);
+    if (exactMatch) {
+      totalScore += skillScores[exactMatch];
+      return;
+    }
+    
+    // 部分一致のスキルを探す
+    Object.keys(skillScores).forEach(key => {
+      if (skill.includes(key) || key.includes(skill)) {
+        totalScore += skillScores[key];
+      }
+    });
+  });
+  
+  // グループ決定
+  let group = "未分類";
+  for (const groupDef of groupDefinitions) {
+    if (totalScore >= groupDef.min && totalScore <= groupDef.max) {
+      group = groupDef.name;
+      break;
+    }
+  }
+  
+  // 特徴的なスキル組み合わせの特定
+  let specialType = null;
+  if (skills.some(skill => skill.includes("動画") || skill.includes("編集")) && 
+      skills.some(skill => skill.includes("Canva"))) {
+    specialType = "クリエイター型";
+  } else if (skills.some(skill => skill.includes("ブラインドタッチ")) && 
+             skills.some(skill => skill.includes("スプレッドシート"))) {
+    specialType = "オフィスワーカー型";
+  } else if (skills.length >= 4) {
+    specialType = "オールラウンダー型";
+  }
+  
+  return {
+    score: totalScore,
+    group: group,
+    specialType: specialType,
+    skills: skills
+  };
+}
+
+/**
+ * 類似したPCスキルレベルの人を同じグループに集めた形でグループを形成する関数
+ * @param {Array} members メンバーの配列
+ * @param {Number} numGroups 分割するグループの数
+ * @return {Array} 分割されたグループの配列
+ */
+function createSimilarSkillGroups(members, numGroups) {
+  // 結果の初期化
+  const result = Array(numGroups).fill().map(() => []);
+  
+  // PCスキルグループの数値化
+  const skillOrder = {
+    "上級者": 4,
+    "中級者": 3,
+    "初心者": 2,
+    "非PCユーザー": 1,
+    "未分類": 0
+  };
+  
+  // メンバーをスキルレベルによってソート
+  const sortedMembers = [...members].sort((a, b) => {
+    return skillOrder[b.skillGroup] - skillOrder[a.skillGroup]; // 降順ソート
+  });
+  
+  // 各スキルレベルごとにメンバーを分類
+  const membersBySkill = {};
+  Object.keys(skillOrder).forEach(skill => {
+    membersBySkill[skill] = sortedMembers.filter(member => member.skillGroup === skill);
+  });
+  
+  // 各スキルグループの人数を計算
+  const membersPerGroup = Math.ceil(members.length / numGroups);
+  
+  // 各グループにスキルレベルが類似したメンバーを割り当て
+  let currentGroupIndex = 0;
+  
+  // 上級者から順に割り当て
+  ["上級者", "中級者", "初心者", "非PCユーザー", "未分類"].forEach(skillLevel => {
+    const skillMembers = membersBySkill[skillLevel];
+    
+    // このスキルレベルのメンバーを連続したグループに割り当て
+    for (let i = 0; i < skillMembers.length; i++) {
+      result[currentGroupIndex].push(skillMembers[i]);
+      
+      // 次のメンバーは同じグループに、ただしグループサイズの上限に達したら次のグループへ
+      if (result[currentGroupIndex].length >= membersPerGroup) {
+        currentGroupIndex = (currentGroupIndex + 1) % numGroups;
+      }
+    }
+  });
+  
+  return result;
+}
+
+/**
+ * グループ内の各スキルレベルのメンバー数をカウントする関数
+ * @param {Array} group グループのメンバー配列
+ * @return {Object} スキルレベル別のカウント
+ */
+function countSkillLevels(group) {
+  const skillCount = {
+    "上級者": 0,
+    "中級者": 0,
+    "初心者": 0,
+    "非PCユーザー": 0,
+    "未分類": 0
+  };
+  
+  group.forEach(member => {
+    if (skillCount[member.skillGroup] !== undefined) {
+      skillCount[member.skillGroup]++;
+    } else {
+      skillCount["未分類"]++;
+    }
+  });
+  
+  return skillCount;
+}
+
+/**
+ * 最適な移動メンバーを見つける関数
+ * スキルレベルの類似性を考慮して選択する
+ * @param {Array} sourceGroup 移動元のグループ
+ * @param {Array} targetGroup 移動先のグループ
+ * @return {Object} 移動するメンバー
+ */
+function findBestMemberToMove(sourceGroup, targetGroup) {
+  if (sourceGroup.length === 0) return null;
+  
+  // 移動先グループの主要なスキルレベルを特定
+  const targetSkillCounts = countSkillLevels(targetGroup);
+  let dominantSkill = "";
+  let maxCount = 0;
+  
+  Object.keys(targetSkillCounts).forEach(skill => {
+    if (targetSkillCounts[skill] > maxCount) {
+      maxCount = targetSkillCounts[skill];
+      dominantSkill = skill;
+    }
+  });
+  
+  // 移動先の主要スキルと同じスキルを持つメンバーを移動元から探す
+  let bestMember = sourceGroup.find(member => member.skillGroup === dominantSkill);
+  
+  // 見つからない場合は、移動元の最初のメンバーを選択
+  if (!bestMember && sourceGroup.length > 0) {
+    bestMember = sourceGroup[0];
+  }
+  
+  return bestMember;
+}
+
+/**
+ * メンバーをグループ分けする関数
+ * @param {Array} memberData 会員データの配列
+ * @return {Object} グループごとに分類されたメンバーのオブジェクト
+ */
+function groupMembers(memberData) {
+  // グループを格納するオブジェクト
+  const groups = {};
+  
+  // グループのサイズ制限
+  const minMembersPerGroup = 4;
+  const maxMembersPerGroup = 6;
+  
+  // メンバーデータがない場合は空のオブジェクトを返す
+  if (!memberData || memberData.length === 0) {
+    return groups;
+  }
+  
+  // ===== ステップ1: 各メンバーのPCスキルをスコアリング =====
+  memberData.forEach(member => {
+    const skillResult = scorePCSkills(member.pcSkills);
+    member.skillScore = skillResult.score;
+    member.skillGroup = skillResult.group;
+    member.specialType = skillResult.specialType;
+    member.skillDetails = skillResult.skills;
+  });
+  
+  // ===== ステップ2: すべての希望時間帯（第一・第二）を収集 =====
+  const allTimeSlots = new Set();
+  
+  memberData.forEach(member => {
+    if (member.preferredTime) allTimeSlots.add(member.preferredTime);
+    if (member.secondPreferredTime) allTimeSlots.add(member.secondPreferredTime);
+  });
+  
+  const timeSlots = Array.from(allTimeSlots);
+  
+  // 時間帯が一つも見つからない場合、デフォルトの時間帯を作成
+  if (timeSlots.length === 0) {
+    timeSlots.push("未指定");
+    Logger.log("警告: 有効な時間帯が見つかりませんでした。「未指定」を使用します。");
+  }
+  
+  // ===== ステップ3: 各時間帯に対して適合するメンバーを特定 =====
+  const timeGroups = {};
+  const timeGroupNames = {};
+  
+  timeSlots.forEach((time, index) => {
+    // 第一希望または第二希望が一致するメンバーを抽出
+    const fitMembers = memberData.filter(member => 
+      member.preferredTime === time || member.secondPreferredTime === time
+    );
+    
+    timeGroups[time] = fitMembers;
+    timeGroupNames[time] = `グループ${index + 1}`;
+  });
+  
+  // ===== ステップ4: 各時間帯のグループをさらに分割してスキルバランスを取る =====
+  const finalGroups = {};
+  
+  Object.keys(timeGroups).forEach(time => {
+    const members = timeGroups[time];
+    
+    if (members.length <= maxMembersPerGroup && members.length >= minMembersPerGroup) {
+      // そのままのサイズで良い場合
+      finalGroups[timeGroupNames[time]] = members;
+      
+      // メンバーのグループ情報を更新
+      members.forEach(member => {
+        member.group = timeGroupNames[time];
+        member.assignedTimeSlot = time;
+      });
+    } else if (members.length > maxMembersPerGroup) {
+      // グループをさらに分割する必要がある場合
+      const numSubgroups = Math.ceil(members.length / maxMembersPerGroup);
+      
+      // スキルレベルが類似したメンバー同士でグループ分け
+      const subgroups = createSimilarSkillGroups(members, numSubgroups);
+      
+      // サブグループの名前を設定して保存
+      for (let i = 0; i < subgroups.length; i++) {
+        // 最小人数に満たないグループがあれば、他のグループからメンバーを移動
+        if (subgroups[i].length < minMembersPerGroup) {
+          // 他のグループから移動できるか確認
+          for (let j = 0; j < subgroups.length; j++) {
+            if (i !== j && subgroups[j].length > minMembersPerGroup) {
+              // 移動するメンバーを選択（スキルバランスを考慮）
+              const memberToMove = findBestMemberToMove(subgroups[j], subgroups[i]);
+              if (memberToMove) {
+                const memberIndex = subgroups[j].indexOf(memberToMove);
+                if (memberIndex !== -1) {
+                  // メンバーを移動
+                  subgroups[i].push(memberToMove);
+                  subgroups[j].splice(memberIndex, 1);
+                  
+                  // 必要最小人数に達したかチェック
+                  if (subgroups[i].length >= minMembersPerGroup) {
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        const subgroupName = `${timeGroupNames[time]}-${String.fromCharCode(65 + i)}`; // A, B, C...
+        finalGroups[subgroupName] = subgroups[i];
+        
+        // メンバーのグループ情報を更新
+        subgroups[i].forEach(member => {
+          member.group = subgroupName;
+          member.assignedTimeSlot = time;
+        });
+      }
+    } else if (members.length > 0 && members.length < minMembersPerGroup) {
+      // 最小人数に満たない場合、他の時間帯のグループと統合するか検討
+      let foundGroup = false;
+      
+      // 第二希望に基づいて他の時間帯のグループに再配置
+      members.forEach(member => {
+        if (member.secondPreferredTime && timeGroups[member.secondPreferredTime]) {
+          const targetGroup = Object.keys(finalGroups).find(groupName => {
+            return finalGroups[groupName].some(m => m.assignedTimeSlot === member.secondPreferredTime) &&
+                   finalGroups[groupName].length < maxMembersPerGroup;
+          });
+          
+          if (targetGroup) {
+            finalGroups[targetGroup].push(member);
+            member.group = targetGroup;
+            member.assignedTimeSlot = member.secondPreferredTime;
+            foundGroup = true;
+          }
+        }
+      });
+      
+      // それでも配置できないメンバーのためのグループを作成
+      const remainingMembers = members.filter(member => !member.group);
+      if (remainingMembers.length > 0) {
+        const remainingGroupName = `グループ補欠-${time}`;
+        finalGroups[remainingGroupName] = remainingMembers;
+        
+        remainingMembers.forEach(member => {
+          member.group = remainingGroupName;
+          member.assignedTimeSlot = time;
+        });
+      }
+    }
+  });
+  
+  // 結果の確認
+  if (Object.keys(finalGroups).length === 0) {
+    // グループが作成されなかった場合、全員を1つのグループに
+    groups["デフォルトグループ"] = memberData;
+    memberData.forEach(member => {
+      member.group = "デフォルトグループ";
+      member.assignedTimeSlot = "未指定";
+    });
+  } else {
+    // 最終的なグループを設定
+    Object.keys(finalGroups).forEach(key => {
+      if (finalGroups[key] && finalGroups[key].length > 0) {
+        groups[key] = finalGroups[key];
+      }
+    });
+  }
+  
+  return groups;
+}
+
+/**
+ * 年代を取得するバックアップ関数
+ * 年代カラムがない場合に使用（実際の環境に合わせて実装が必要）
+ * @param {Array} row データ行
+ * @return {String} 年代（例: "20代", "30代"など）
+ */
+function getAgeGroup(row) {
+  // 年代カラムが見つからない場合のバックアップ処理
+  // 以下は仮のロジック（実際の環境では他のデータから年代を推測する処理を実装）
+  return "不明";
+}
+
+/**
+ * 結果をスプレッドシートに出力する関数
+ * @param {Object} groupedMembers グループごとに分類されたメンバーのオブジェクト
+ * @param {Date} startDate 処理対象の年月
+ * @param {Date} execDate 実行日時
+ * @return {String} 作成したタブの名前
+ */
+function outputResults(groupedMembers, startDate, execDate) {
+  // スプレッドシートを取得
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // タブ名の作成
+  const targetYearMonth = Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy年MM月");
+  const execDateTime = Utilities.formatDate(execDate, Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+  const tabName = `グループ分け_${targetYearMonth}_${execDateTime}`;
+  
+  // 新しいタブを作成
+  let resultSheet = ss.insertSheet(tabName);
+  
+  // ヘッダー行の設定
+  const headers = ["グループ名", "氏名", "会員番号", "クラス", "年代", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望時間帯", "第二希望時間帯", "割当時間帯"];
+  resultSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  
+  // 実行情報の設定
+  const infoRange = resultSheet.getRange(1, headers.length + 2, 3, 2);
+  infoRange.setValues([
+    ["処理対象年月", targetYearMonth],
+    ["実行日時", Utilities.formatDate(execDate, Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss")],
+    ["対象件数", Object.values(groupedMembers).flat().length + "名"]
+  ]);
+  
+  // スキルグループのカウント情報の設定（各グループごとに集計）
+  let skillGroupInfo = [];
+  skillGroupInfo.push(["【グループ別スキルレベル集計】", ""]);
+  
+  Object.keys(groupedMembers).forEach(groupName => {
+    const members = groupedMembers[groupName];
+    const skillCounts = countSkillLevels(members);
+    
+    skillGroupInfo.push([
+      groupName,
+      `上級者: ${skillCounts["上級者"]}名, 中級者: ${skillCounts["中級者"]}名, 初心者: ${skillCounts["初心者"]}名, 非PCユーザー: ${skillCounts["非PCユーザー"]}名`
+    ]);
+  });
+  
+  // スキル情報の表示
+  if (skillGroupInfo.length > 1) {
+    const skillInfoRange = resultSheet.getRange(5, headers.length + 2, skillGroupInfo.length, 2);
+    skillInfoRange.setValues(skillGroupInfo);
+    skillInfoRange.getCell(1, 1).setFontWeight("bold");
+  }
+  
+  // 結果データの作成
+  const resultData = [];
+  
+  Object.keys(groupedMembers).forEach(groupName => {
+    const members = groupedMembers[groupName];
+    
+    members.forEach(member => {
+      resultData.push([
+        groupName,
+        member.name,
+        member.memberNumber,
+        member.class,
+        member.ageGroup,
+        member.pcSkills || "",
+        member.skillGroup || "",
+        member.specialType || "",
+        member.preferredTime || "",
+        member.secondPreferredTime || "",
+        member.assignedTimeSlot || ""
+      ]);
+    });
+  });
+  
+  // データがある場合のみ出力
+  if (resultData.length > 0) {
+    resultSheet.getRange(2, 1, resultData.length, headers.length).setValues(resultData);
+  }
+  
+  // フォーマットの設定
+  resultSheet.getRange(1, 1, 1, headers.length).setBackground("#f3f3f3").setFontWeight("bold");
+  infoRange.setBackground("#e6f2ff");
+  resultSheet.autoResizeColumns(1, headers.length + 3);
+  resultSheet.setFrozenRows(1);
+  
+  return tabName;
+}
+
+/**
+ * 処理完了通知メールを送信する関数
+ * @param {Date} startDate 処理対象の年月
+ * @param {Number} totalCount 処理したデータの総数
+ * @param {Object} groupedMembers グループごとに分類されたメンバーのオブジェクト
+ * @param {String} tabName 作成したタブの名前
+ */
+function sendNotificationEmail(startDate, totalCount, groupedMembers, tabName) {
+  // メール送信先（実際には適切な担当者のメールアドレスを設定）
+  const recipient = Session.getActiveUser().getEmail();
+  
+  // スプレッドシートのURL
+  const ssUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
+  
+  // グループ情報のサマリー
+  let groupSummary = "";
+  Object.keys(groupedMembers).forEach(groupName => {
+    const members = groupedMembers[groupName];
+    const skillCounts = countSkillLevels(members);
+    
+    groupSummary += `- ${groupName}: ${members.length}名 `;
+    groupSummary += `(上級者: ${skillCounts["上級者"]}名, 中級者: ${skillCounts["中級者"]}名, 初心者: ${skillCounts["初心者"]}名, 非PCユーザー: ${skillCounts["非PCユーザー"]}名)\n`;
+  });
+  
+  // メールの件名
+  const subject = `【グループ分け処理完了】${startDate.getFullYear()}年${startDate.getMonth() + 1}月対象`;
+  
+  // メールの本文
+  const body = `
+グループ分け処理が完了しました。
+
+■ 処理情報
+・実行日時: ${new Date().toLocaleString()}
+・対象年月: ${startDate.getFullYear()}年${startDate.getMonth() + 1}月
+・対象データ数: ${totalCount}名
+・グループサイズ: 最少4名、最大6名
+
+■ グループ分け結果サマリー
+${groupSummary}
+
+■ 詳細結果
+下記のリンクからスプレッドシートの「${tabName}」タブをご確認ください。
+${ssUrl}
+
+※本メールは自動送信されています。
+  `;
+  
+  // メール送信
+  GmailApp.sendEmail(recipient, subject, body);
+}
+
+/**
+ * エラー通知メールを送信する関数
+ * @param {Error} error 発生したエラー
+ */
+function sendErrorEmail(error) {
+  // メール送信先（実際には適切な担当者のメールアドレスを設定）
+  const recipient = Session.getActiveUser().getEmail();
+  
+  // スプレッドシートのURL
+  const ssUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
+  
+  // メールの件名
+  const subject = `【エラー発生】グループ分け処理`;
+  
+  // メールの本文
+  const body = `
+グループ分け処理中にエラーが発生しました。
+
+■ エラー情報
+・発生日時: ${new Date().toLocaleString()}
+・エラー内容: ${error.toString()}
+・スタックトレース: ${error.stack || "利用不可"}
+
+■ スプレッドシートリンク
+${ssUrl}
+
+※本メールは自動送信されています。エラーが継続する場合は、スクリプトの修正が必要です。
+  `;
+  
+  // メール送信
+  GmailApp.sendEmail(recipient, subject, body);
+}
