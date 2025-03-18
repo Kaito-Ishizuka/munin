@@ -227,37 +227,37 @@ function getMemberData(values, columnIndices, startDate) {
  * @return {Object} スコアとグループ情報を含むオブジェクト
  */
 function scorePCSkills(skillText) {
-  if (!skillText) return { score: 0, group: "初心者", specialType: null, skills: [] };
+  if (!skillText) return { score: 0, group: "Beginner", specialType: null, skills: [] };
   
   // スキルを配列に変換（カンマまたは改行で区切られている可能性がある）
   const skills = skillText.split(/[,\n]/).map(skill => skill.trim()).filter(s => s);
   
   // スキルごとの点数配分
   const skillScores = {
-    "パソコンを持っていない": -10,
-    "日常的にほとんど使っていない": -5,
-    "Webサイトを閲覧している": 1,
-    "ブラインドタッチができる": 3,
-    "スプレッドシートの理解がある程度ある": 5,
-    "Canvaをある程度使っている": 7,
-    "短い動画の編集ができる": 8
+    "No computer": -10,
+    "Rarely use computers": -5,
+    "Web browsing": 1,
+    "Touch typing": 3,
+    "Spreadsheet skills": 5,
+    "Canva design": 7,
+    "Video editing": 8
   };
   
   // スコア範囲とグループの定義
   const groupDefinitions = [
-    { min: -999, max: 0, name: "非PCユーザー" },
-    { min: 1, max: 4, name: "初心者" },
-    { min: 5, max: 10, name: "中級者" },
-    { min: 11, max: 999, name: "上級者" }
+    { min: -999, max: 0, name: "Non-PC User" },
+    { min: 1, max: 4, name: "Beginner" },
+    { min: 5, max: 10, name: "Intermediate" },
+    { min: 11, max: 999, name: "Advanced" }
   ];
   
   // 特殊ケース: PCを持っていない場合は他のスキルを無視
-  if (skills.some(skill => skill.includes("パソコンを持っていない"))) {
+  if (skills.some(skill => skill.includes("No computer"))) {
     return {
-      score: skillScores["パソコンを持っていない"],
-      group: "非PCユーザー",
+      score: skillScores["No computer"],
+      group: "Non-PC User",
       specialType: null,
-      skills: ["パソコンを持っていない"]
+      skills: ["No computer"]
     };
   }
   
@@ -280,7 +280,7 @@ function scorePCSkills(skillText) {
   });
   
   // グループ決定
-  let group = "未分類";
+  let group = "Unclassified";
   for (const groupDef of groupDefinitions) {
     if (totalScore >= groupDef.min && totalScore <= groupDef.max) {
       group = groupDef.name;
@@ -290,14 +290,14 @@ function scorePCSkills(skillText) {
   
   // 特徴的なスキル組み合わせの特定
   let specialType = null;
-  if (skills.some(skill => skill.includes("動画") || skill.includes("編集")) && 
+  if (skills.some(skill => skill.includes("Video") || skill.includes("editing")) && 
       skills.some(skill => skill.includes("Canva"))) {
-    specialType = "クリエイター型";
-  } else if (skills.some(skill => skill.includes("ブラインドタッチ")) && 
-             skills.some(skill => skill.includes("スプレッドシート"))) {
-    specialType = "オフィスワーカー型";
+    specialType = "Creative Type";
+  } else if (skills.some(skill => skill.includes("Touch typing")) && 
+             skills.some(skill => skill.includes("Spreadsheet"))) {
+    specialType = "Office Worker Type";
   } else if (skills.length >= 4) {
-    specialType = "オールラウンダー型";
+    specialType = "All-Rounder";
   }
   
   return {
@@ -306,6 +306,257 @@ function scorePCSkills(skillText) {
     specialType: specialType,
     skills: skills
   };
+}
+
+/**
+ * グループ内の各スキルレベルのメンバー数をカウントする関数
+ * @param {Array} group グループのメンバー配列
+ * @return {Object} スキルレベル別のカウント
+ */
+function countSkillLevels(group) {
+  const skillCount = {
+    "Advanced": 0,
+    "Intermediate": 0,
+    "Beginner": 0,
+    "Non-PC User": 0,
+    "Unclassified": 0
+  };
+  
+  group.forEach(member => {
+    if (skillCount[member.skillGroup] !== undefined) {
+      skillCount[member.skillGroup]++;
+    } else {
+      skillCount["Unclassified"]++;
+    }
+  });
+  
+  return skillCount;
+}
+
+/**
+ * 類似したPCスキルレベルの人を同じグループに集めた形でグループを形成する関数
+ * @param {Array} members メンバーの配列
+ * @param {Number} numGroups 分割するグループの数
+ * @return {Array} 分割されたグループの配列
+ */
+function createSimilarSkillGroups(members, numGroups) {
+  // 結果の初期化
+  const result = Array(numGroups).fill().map(() => []);
+  
+  // PCスキルグループの数値化
+  const skillOrder = {
+    "Advanced": 4,
+    "Intermediate": 3,
+    "Beginner": 2,
+    "Non-PC User": 1,
+    "Unclassified": 0
+  };
+  
+  // メンバーをスキルレベルによってソート
+  const sortedMembers = [...members].sort((a, b) => {
+    return skillOrder[b.skillGroup] - skillOrder[a.skillGroup]; // 降順ソート
+  });
+  
+  // 各スキルレベルごとにメンバーを分類
+  const membersBySkill = {};
+  Object.keys(skillOrder).forEach(skill => {
+    membersBySkill[skill] = sortedMembers.filter(member => member.skillGroup === skill);
+  });
+  
+  // 各スキルグループの人数を計算
+  const membersPerGroup = Math.ceil(members.length / numGroups);
+  
+  // 各グループにスキルレベルが類似したメンバーを割り当て
+  let currentGroupIndex = 0;
+  
+  // 上級者から順に割り当て
+  ["Advanced", "Intermediate", "Beginner", "Non-PC User", "Unclassified"].forEach(skillLevel => {
+    const skillMembers = membersBySkill[skillLevel];
+    
+    // このスキルレベルのメンバーを連続したグループに割り当て
+    for (let i = 0; i < skillMembers.length; i++) {
+      result[currentGroupIndex].push(skillMembers[i]);
+      
+      // 次のメンバーは同じグループに、ただしグループサイズの上限に達したら次のグループへ
+      if (result[currentGroupIndex].length >= membersPerGroup) {
+        currentGroupIndex = (currentGroupIndex + 1) % numGroups;
+      }
+    }
+  });
+  
+  return result;
+}
+
+/**
+ * 最適な移動メンバーを見つける関数
+ * スキルレベルの類似性を考慮して選択する
+ * @param {Array} sourceGroup 移動元のグループ
+ * @param {Array} targetGroup 移動先のグループ
+ * @return {Object} 移動するメンバー
+ */
+function findBestMemberToMove(sourceGroup, targetGroup) {
+  if (sourceGroup.length === 0) return null;
+  
+  // 移動先グループの主要なスキルレベルを特定
+  const targetSkillCounts = countSkillLevels(targetGroup);
+  let dominantSkill = "";
+  let maxCount = 0;
+  
+  Object.keys(targetSkillCounts).forEach(skill => {
+    if (targetSkillCounts[skill] > maxCount) {
+      maxCount = targetSkillCounts[skill];
+      dominantSkill = skill;
+    }
+  });
+  
+  // 移動先の主要スキルと同じスキルを持つメンバーを移動元から探す
+  let bestMember = sourceGroup.find(member => member.skillGroup === dominantSkill);
+  
+  // 見つからない場合は、移動元の最初のメンバーを選択
+  if (!bestMember && sourceGroup.length > 0) {
+    bestMember = sourceGroup[0];
+  }
+  
+  return bestMember;
+}
+
+/**
+ * 結果をスプレッドシートに出力する関数
+ * @param {Object} groupedMembers グループごとに分類されたメンバーのオブジェクト
+ * @param {Date} startDate 処理対象の年月
+ * @param {Date} execDate 実行日時
+ * @return {String} 作成したタブの名前
+ */
+function outputResults(groupedMembers, startDate, execDate) {
+  // スプレッドシートを取得
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // タブ名の作成
+  const targetYearMonth = Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy年MM月");
+  const execDateTime = Utilities.formatDate(execDate, Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+  const tabName = `グループ分け_${targetYearMonth}_${execDateTime}`;
+  
+  // 新しいタブを作成
+  let resultSheet = ss.insertSheet(tabName);
+  
+  // ヘッダー行の設定
+  const headers = ["Group Name", "Name", "Member ID", "Class", "Age Group", "PC Skills", "Skill Level", "Special Skills", "First Preference", "Second Preference"];
+  resultSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  
+  // 実行情報の設定
+  const infoRange = resultSheet.getRange(1, headers.length + 2, 3, 2);
+  infoRange.setValues([
+    ["Target Month", targetYearMonth],
+    ["Execution Date", Utilities.formatDate(execDate, Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss")],
+    ["Total Members", Object.values(groupedMembers).flat().length + " members"]
+  ]);
+  
+  // スキルグループのカウント情報の設定（各グループごとに集計）
+  let skillGroupInfo = [];
+  skillGroupInfo.push(["【Skill Level Summary by Group】", ""]);
+  
+  Object.keys(groupedMembers).forEach(groupName => {
+    const members = groupedMembers[groupName];
+    const skillCounts = countSkillLevels(members);
+    
+    skillGroupInfo.push([
+      groupName,
+      `Advanced: ${skillCounts["Advanced"]} members, Intermediate: ${skillCounts["Intermediate"]} members, Beginner: ${skillCounts["Beginner"]} members, Non-PC User: ${skillCounts["Non-PC User"]} members`
+    ]);
+  });
+  
+  // スキル情報の表示
+  if (skillGroupInfo.length > 1) {
+    const skillInfoRange = resultSheet.getRange(5, headers.length + 2, skillGroupInfo.length, 2);
+    skillInfoRange.setValues(skillGroupInfo);
+    skillInfoRange.getCell(1, 1).setFontWeight("bold");
+  }
+  
+  // 結果データの作成
+  const resultData = [];
+  
+  Object.keys(groupedMembers).forEach(groupName => {
+    const members = groupedMembers[groupName];
+    
+    members.forEach(member => {
+      resultData.push([
+        groupName,
+        member.name,
+        member.memberNumber,
+        member.class,
+        member.ageGroup,
+        member.pcSkills || "",
+        member.skillGroup || "",
+        member.specialType || "",
+        member.preferredTime || "",
+        member.secondPreferredTime || ""
+      ]);
+    });
+  });
+  
+  // データがある場合のみ出力
+  if (resultData.length > 0) {
+    resultSheet.getRange(2, 1, resultData.length, headers.length).setValues(resultData);
+  }
+  
+  // フォーマットの設定
+  resultSheet.getRange(1, 1, 1, headers.length).setBackground("#f3f3f3").setFontWeight("bold");
+  infoRange.setBackground("#e6f2ff");
+  resultSheet.autoResizeColumns(1, headers.length + 3);
+  resultSheet.setFrozenRows(1);
+  
+  return tabName;
+}
+
+/**
+ * 処理完了通知メールを送信する関数
+ * @param {Date} startDate 処理対象の年月
+ * @param {Number} totalCount 処理したデータの総数
+ * @param {Object} groupedMembers グループごとに分類されたメンバーのオブジェクト
+ * @param {String} tabName 作成したタブの名前
+ */
+function sendNotificationEmail(startDate, totalCount, groupedMembers, tabName) {
+  // メール送信先（実際には適切な担当者のメールアドレスを設定）
+  const recipient = Session.getActiveUser().getEmail();
+  
+  // スプレッドシートのURL
+  const ssUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
+  
+  // グループ情報のサマリー
+  let groupSummary = "";
+  Object.keys(groupedMembers).forEach(groupName => {
+    const members = groupedMembers[groupName];
+    const skillCounts = countSkillLevels(members);
+    
+    groupSummary += `- ${groupName}: ${members.length} members `;
+    groupSummary += `(Advanced: ${skillCounts["Advanced"]}, Intermediate: ${skillCounts["Intermediate"]}, Beginner: ${skillCounts["Beginner"]}, Non-PC User: ${skillCounts["Non-PC User"]})\n`;
+  });
+  
+  // メールの件名
+  const subject = `【Group Assignment Complete】${startDate.getFullYear()}/${startDate.getMonth() + 1} Processing`;
+  
+  // メールの本文
+  const body = `
+Group assignment process has been completed.
+
+■ Process Information
+・Execution Date: ${new Date().toLocaleString()}
+・Target Month: ${startDate.getFullYear()}/${startDate.getMonth() + 1}
+・Total Members: ${totalCount}
+・Group Size: Min 4, Max 6 members
+
+■ Group Assignment Summary
+${groupSummary}
+
+■ Detailed Results
+Please check the "${tabName}" tab in the spreadsheet using the link below:
+${ssUrl}
+
+※This email was sent automatically.
+  `;
+  
+  // メール送信
+  GmailApp.sendEmail(recipient, subject, body);
 }
 
 /**
