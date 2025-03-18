@@ -222,42 +222,42 @@ function getMemberData(values, columnIndices, startDate) {
 }
 
 /**
- * PCスキルに基づいてスコアリングとグループ分けを行う関数
+ * PCスキルに基づいてスコアリングとグループ分けを行う関数 - 和風命名バージョン
  * @param {String} skillText PCスキルのテキスト
  * @return {Object} スコアとグループ情報を含むオブジェクト
  */
 function scorePCSkills(skillText) {
-  if (!skillText) return { score: 0, group: "初心者", specialType: null, skills: [] };
+  if (!skillText) return { score: 0, group: "入門", specialType: null, skills: [] };
   
   // スキルを配列に変換（カンマまたは改行で区切られている可能性がある）
   const skills = skillText.split(/[,\n]/).map(skill => skill.trim()).filter(s => s);
   
-  // スキルごとの点数配分
+  // スキルごとの点数配分 - 和風命名
   const skillScores = {
-    "パソコンを持っていない": -10,
-    "日常的にほとんど使っていない": -5,
-    "Webサイトを閲覧している": 1,
-    "ブラインドタッチができる": 3,
-    "スプレッドシートの理解がある程度ある": 5,
-    "Canvaをある程度使っている": 7,
-    "短い動画の編集ができる": 8
+    "機器無": -10,            // パソコンを持っていない
+    "無縁": -5,               // 日常的にほとんど使っていない
+    "閲覧術": 1,               // Webサイトを閲覧している
+    "盲打の術": 3,             // ブラインドタッチができる
+    "表計算の心得": 5,         // スプレッドシートの理解がある程度ある
+    "画仙の技": 7,             // Canvaをある程度使っている
+    "映像編の技": 8            // 短い動画の編集ができる
   };
   
-  // スコア範囲とグループの定義
+  // スコア範囲とグループの定義 - 和風命名
   const groupDefinitions = [
-    { min: -999, max: 0, name: "非PCユーザー" },
-    { min: 1, max: 4, name: "初心者" },
-    { min: 5, max: 10, name: "中級者" },
-    { min: 11, max: 999, name: "上級者" }
+    { min: -999, max: 0, name: "門外漢" },     // 非PCユーザー
+    { min: 1, max: 4, name: "入門" },         // 初心者
+    { min: 5, max: 10, name: "修行中" },      // 中級者
+    { min: 11, max: 999, name: "達人" }       // 上級者
   ];
   
   // 特殊ケース: PCを持っていない場合は他のスキルを無視
-  if (skills.some(skill => skill.includes("パソコンを持っていない"))) {
+  if (skills.some(skill => skill.includes("機器無") || skill.includes("パソコンを持っていない"))) {
     return {
-      score: skillScores["パソコンを持っていない"],
-      group: "非PCユーザー",
+      score: skillScores["機器無"],
+      group: "門外漢",
       specialType: null,
-      skills: ["パソコンを持っていない"]
+      skills: ["機器無"]
     };
   }
   
@@ -288,16 +288,16 @@ function scorePCSkills(skillText) {
     }
   }
   
-  // 特徴的なスキル組み合わせの特定
+  // 特徴的なスキル組み合わせの特定 - 和風命名
   let specialType = null;
-  if (skills.some(skill => skill.includes("動画") || skill.includes("編集")) && 
-      skills.some(skill => skill.includes("Canva"))) {
-    specialType = "クリエイター型";
-  } else if (skills.some(skill => skill.includes("ブラインドタッチ")) && 
-             skills.some(skill => skill.includes("スプレッドシート"))) {
-    specialType = "オフィスワーカー型";
+  if (skills.some(skill => skill.includes("映像") || skill.includes("編集")) && 
+      skills.some(skill => skill.includes("画仙") || skill.includes("Canva"))) {
+    specialType = "絵師型";  // クリエイター型
+  } else if (skills.some(skill => skill.includes("盲打") || skill.includes("ブラインドタッチ")) && 
+             skills.some(skill => skill.includes("表計算") || skill.includes("スプレッドシート"))) {
+    specialType = "文官型";  // オフィスワーカー型
   } else if (skills.length >= 4) {
-    specialType = "オールラウンダー型";
+    specialType = "万能型";  // オールラウンダー型
   }
   
   return {
