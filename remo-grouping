@@ -63,7 +63,7 @@ function main() {
     // カラムのインデックスを取得（代替名も考慮）
     const columnIndices = {
       memberNumber: getColumnIndexWithAlternatives(headers, "会員番号", ["メンバー番号", "ID"]),
-      name: getColumnIndexWithAlternatives(headers, "氏名", ["名前", "フルネーム"]),
+      name: getColumnIndexWithAlternatives(headers, "会員氏名", ["氏名", "フルネーム"]),
       campStartDate: getColumnIndexWithAlternatives(headers, "Camp開始日", ["キャンプ開始日", "camp開始日"]),
       myRoadmap: getColumnIndexWithAlternatives(headers, "マイロードマップ", ["ロードマップ"]),
       ageGroup: getColumnIndexWithAlternatives(headers, "年代", ["年齢層", "年齢"]),
@@ -74,7 +74,8 @@ function main() {
       officeLineAlert: getColumnIndexWithAlternatives(headers, "事務局LINE", ["事務局ライン", "事務局アラート"]),
       supportAlert: getColumnIndexWithAlternatives(headers, "少サポ", ["少人数サポート", "サポート"]),
       exitDate: getColumnIndexWithAlternatives(headers, "退会日", ["退会年月日", "脱会日"]),
-      teamConsideration: getColumnIndexWithAlternatives(headers, "チーム分け配慮", ["チーム配慮", "グループ配慮"])
+      teamConsideration: getColumnIndexWithAlternatives(headers, "チーム分け配慮", ["チーム配慮", "グループ配慮"]),
+      remarks: getColumnIndexWithAlternatives(headers, "備考", ["メモ", "コメント", "注釈"]) // 備考カラムを追加
     };
     
     // 必要なカラムが存在するか確認
@@ -223,6 +224,9 @@ function getMemberData(values, columnIndices, startDate) {
       // チーム分け配慮情報の取得
       const teamConsideration = columnIndices.teamConsideration !== -1 ? row[columnIndices.teamConsideration] || "" : "";
       
+      // 備考情報の取得
+      const remarks = columnIndices.remarks !== -1 ? row[columnIndices.remarks] || "" : "";
+      
       // 抽出するデータを整形
       targetData.push({
         name: row[columnIndices.name] || "",
@@ -237,7 +241,8 @@ function getMemberData(values, columnIndices, startDate) {
         officeLineAlert: officeLineAlert,
         supportAlert: supportAlert,
         exitDate: exitDate, // 退会日情報
-        teamConsideration: teamConsideration, // チーム分け配慮情報を追加
+        teamConsideration: teamConsideration, // チーム分け配慮情報
+        remarks: remarks, // 備考情報を追加
         group: null, // グループ分け結果を格納するためのプロパティ
         skillScore: 0, // PCスキルスコア（初期値）
         skillGroup: "", // PCスキルグループ（初期値）
@@ -680,9 +685,8 @@ function outputResults(groupedMembers, startDate, execDate) {
   // 新しいタブを作成
   let resultSheet = ss.insertSheet(tabName);
   
-  // ヘッダー行の設定 - 新しいデータを含む
-  // 新たに「リーダー名」「コーチ名」「サポーター名」カラムを追加
-  const headers = ["グループ名", "リーダー名", "コーチ名", "サポーター名", "氏名", "会員番号", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望", "第二希望", "年代", "マイロードマップ", "学習LINE", "事務局LINE", "少サポ", "退会日", "チーム分け配慮"];
+  // ヘッダー行の設定 - 備考カラムを追加
+  const headers = ["グループ名", "リーダー名", "コーチ名", "サポーター名", "氏名", "会員番号", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望", "第二希望", "年代", "マイロードマップ", "学習LINE", "事務局LINE", "少サポ", "退会日", "チーム分け配慮", "備考"];
   resultSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   
   // 実行情報の設定
@@ -722,7 +726,7 @@ function outputResults(groupedMembers, startDate, execDate) {
     
     members.forEach(member => {
       // デバッグログ: メンバーデータを確認
-      Logger.log(`メンバー出力: ${member.name} - チーム分け配慮: ${member.teamConsideration}`);
+      Logger.log(`メンバー出力: ${member.name} - チーム分け配慮: ${member.teamConsideration} - 備考: ${member.remarks}`);
       
       resultData.push([
         groupName,
@@ -742,7 +746,8 @@ function outputResults(groupedMembers, startDate, execDate) {
         member.officeLineAlert || "",
         member.supportAlert || "",
         member.exitDate instanceof Date ? Utilities.formatDate(member.exitDate, Session.getScriptTimeZone(), "yyyy/MM/dd") : "",
-        member.teamConsideration || ""
+        member.teamConsideration || "",
+        member.remarks || ""  // 備考カラムのデータを追加
       ]);
     });
   });
@@ -752,7 +757,8 @@ function outputResults(groupedMembers, startDate, execDate) {
     // デバッグログ: 結果データの最初の5行を確認
     for (let i = 0; i < Math.min(5, resultData.length); i++) {
       Logger.log(`結果データ ${i+1}行目: ${resultData[i]}`);
-      Logger.log(`チーム分け配慮列の値: ${resultData[i][17]}`); // インデックスを更新
+      Logger.log(`チーム分け配慮列の値: ${resultData[i][17]}`);
+      Logger.log(`備考列の値: ${resultData[i][18]}`);
     }
     
     resultSheet.getRange(2, 1, resultData.length, headers.length).setValues(resultData);
@@ -810,7 +816,43 @@ function outputResults(groupedMembers, startDate, execDate) {
     }
   }
   
+  // 1. まず自動リサイズを適用
   resultSheet.autoResizeColumns(1, headers.length + 3);
+  
+  // 2. 各カラムに追加の幅を設定
+  const minWidths = {
+    "グループ名": 140,
+    "リーダー名": 120,
+    "コーチ名": 120,
+    "サポーター名": 120,
+    "氏名": 140,
+    "会員番号": 100,
+    "PCスキル": 250,
+    "PCスキルグループ": 100,
+    "特別スキル": 120,
+    "第一希望": 120,
+    "第二希望": 120,
+    "年代": 80,
+    "マイロードマップ": 180,
+    "学習LINE": 80,
+    "事務局LINE": 80,
+    "少サポ": 80,
+    "退会日": 100,
+    "チーム分け配慮": 250,
+    "備考": 250  // 備考カラムの幅を設定
+  };
+  
+  // 各カラムに最小幅を設定
+  headers.forEach((header, index) => {
+    const currentWidth = resultSheet.getColumnWidth(index + 1);
+    const minWidth = minWidths[header] || 120; // デフォルトの最小幅は120
+    
+    // 現在の幅が最小幅より小さい場合のみ調整
+    if (currentWidth < minWidth) {
+      resultSheet.setColumnWidth(index + 1, minWidth);
+    }
+  });
+  
   resultSheet.setFrozenRows(1);
   
   return tabName;
