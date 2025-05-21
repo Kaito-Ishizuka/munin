@@ -63,7 +63,7 @@ function main() {
     // カラムのインデックスを取得（代替名も考慮）
     const columnIndices = {
       memberNumber: getColumnIndexWithAlternatives(headers, "会員番号", ["メンバー番号", "ID"]),
-      name: getColumnIndexWithAlternatives(headers, "会員氏名", ["名前", "フルネーム"]),
+      name: getColumnIndexWithAlternatives(headers, "氏名", ["名前", "フルネーム"]),
       campStartDate: getColumnIndexWithAlternatives(headers, "Camp開始日", ["キャンプ開始日", "camp開始日"]),
       myRoadmap: getColumnIndexWithAlternatives(headers, "マイロードマップ", ["ロードマップ"]),
       ageGroup: getColumnIndexWithAlternatives(headers, "年代", ["年齢層", "年齢"]),
@@ -96,7 +96,7 @@ function main() {
     }
     
     // グループ分け処理
-    const groupedMembers = groupMembers(memberData);
+    const groupedMembers = groupMembers(memberData, startDate);
     
     // 結果の出力
     const tabName = outputResults(groupedMembers, startDate, execDate);
@@ -452,9 +452,10 @@ function findBestMemberToMove(sourceGroup, targetGroup) {
 /**
  * メンバーをグループ分けする関数
  * @param {Array} memberData 会員データの配列
+ * @param {Date} startDate 処理対象の年月の Date オブジェクト
  * @return {Object} グループごとに分類されたメンバーのオブジェクト
  */
-function groupMembers(memberData) {
+function groupMembers(memberData, startDate) {
   // グループを格納するオブジェクト
   const groupedMembers = {};
   
@@ -498,8 +499,11 @@ function groupMembers(memberData) {
   const timeGroups = {};
   const timeGroupNames = {};
   
+  // 年月フォーマットを取得（すべてのグループ名生成で使用）
+  const formatDate = Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyyMM");
+  
   timeSlots.forEach((time, index) => {
-    timeGroupNames[time] = `グループ${index + 1}`;
+    timeGroupNames[time] = `${formatDate}-${index + 1}`;
     
     // 第一希望が一致し、まだ割り当てられていないメンバーを抽出
     const primaryMembers = memberData.filter(member => 
@@ -618,7 +622,7 @@ function groupMembers(memberData) {
           }
         }
         
-        const subgroupName = `${timeGroupNames[time]}-${String.fromCharCode(65 + i)}`; // A, B, C...
+        const subgroupName = `${timeGroupNames[time]}-${String.fromCharCode(65 + i)}`; // 202505-1-A 形式
         finalGroups[subgroupName] = subgroups[i];
         
         // メンバーのグループ情報を更新
@@ -677,7 +681,8 @@ function outputResults(groupedMembers, startDate, execDate) {
   let resultSheet = ss.insertSheet(tabName);
   
   // ヘッダー行の設定 - 新しいデータを含む
-  const headers = ["グループ名", "氏名", "会員番号", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望", "第二希望", "年代", "マイロードマップ", "学習LINE", "事務局LINE", "少サポ", "退会日", "チーム分け配慮"];
+  // 新たに「リーダー名」「コーチ名」「サポーター名」カラムを追加
+  const headers = ["グループ名", "リーダー名", "コーチ名", "サポーター名", "氏名", "会員番号", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望", "第二希望", "年代", "マイロードマップ", "学習LINE", "事務局LINE", "少サポ", "退会日", "チーム分け配慮"];
   resultSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   
   // 実行情報の設定
@@ -721,6 +726,9 @@ function outputResults(groupedMembers, startDate, execDate) {
       
       resultData.push([
         groupName,
+        "",  // リーダー名 (空欄)
+        "",  // コーチ名 (空欄)
+        "",  // サポーター名 (空欄)
         member.name,
         member.memberNumber,
         member.pcSkills || "",
@@ -744,7 +752,7 @@ function outputResults(groupedMembers, startDate, execDate) {
     // デバッグログ: 結果データの最初の5行を確認
     for (let i = 0; i < Math.min(5, resultData.length); i++) {
       Logger.log(`結果データ ${i+1}行目: ${resultData[i]}`);
-      Logger.log(`チーム分け配慮列の値: ${resultData[i][14]}`);
+      Logger.log(`チーム分け配慮列の値: ${resultData[i][17]}`); // インデックスを更新
     }
     
     resultSheet.getRange(2, 1, resultData.length, headers.length).setValues(resultData);
@@ -756,7 +764,7 @@ function outputResults(groupedMembers, startDate, execDate) {
   
   // アラート値に応じてセルの色を変更
   if (resultData.length > 0) {
-    // 学習LINE
+    // 学習LINE（列インデックスを更新）
     const studyLineColumn = headers.indexOf("学習LINE") + 1;
     if (studyLineColumn > 0) {
       for (let i = 0; i < resultData.length; i++) {
@@ -771,7 +779,7 @@ function outputResults(groupedMembers, startDate, execDate) {
       }
     }
     
-    // 事務局LINE
+    // 事務局LINE（列インデックスを更新）
     const officeLineColumn = headers.indexOf("事務局LINE") + 1;
     if (officeLineColumn > 0) {
       for (let i = 0; i < resultData.length; i++) {
@@ -786,7 +794,7 @@ function outputResults(groupedMembers, startDate, execDate) {
       }
     }
     
-    // 少サポ
+    // 少サポ（列インデックスを更新）
     const supportColumn = headers.indexOf("少サポ") + 1;
     if (supportColumn > 0) {
       for (let i = 0; i < resultData.length; i++) {
