@@ -28,7 +28,8 @@ function showHelp() {
     "※ グループ分けは以下の基準で行われます：\n" +
     "- 第一希望または第二希望の時間帯が共通のメンバーを同じグループに\n" +
     "- 同様のPCスキルレベルのメンバーを同じグループに\n" +
-    "- 一つのグループあたり最少4名、最大6名まで";
+    "- 一つのグループあたり最少4名、最大6名まで\n" +
+    "- 退会日が設定されており、Camp開始日より前の場合は除外されます";
   
   ui.alert('グループ分けツールのヘルプ', helpText, ui.ButtonSet.OK);
 }
@@ -61,20 +62,26 @@ function main() {
     
     // カラムのインデックスを取得（代替名も考慮）
     const columnIndices = {
-      campStartDate: getColumnIndexWithAlternatives(headers, "Camp開始日", ["キャンプ開始日", "camp開始日"]),
-      name: getColumnIndexWithAlternatives(headers, "氏名", ["名前", "フルネーム"]),
       memberNumber: getColumnIndexWithAlternatives(headers, "会員番号", ["メンバー番号", "ID"]),
-      class: getColumnIndexWithAlternatives(headers, "クラス", ["会員クラス", "メンバークラス"]),
+      name: getColumnIndexWithAlternatives(headers, "会員氏名", ["名前", "フルネーム"]),
+      campStartDate: getColumnIndexWithAlternatives(headers, "Camp開始日", ["キャンプ開始日", "camp開始日"]),
+      myRoadmap: getColumnIndexWithAlternatives(headers, "マイロードマップ", ["ロードマップ"]),
+      ageGroup: getColumnIndexWithAlternatives(headers, "年代", ["年齢層", "年齢"]),
       pcSkills: getColumnIndexWithAlternatives(headers, "PCスキル", ["パソコンスキル", "PC経験"]),
-      preferredTime: getColumnIndexWithAlternatives(headers, "第一希望時間帯", ["第一希望", "希望時間1", "第１希望"]),
-      secondPreferredTime: getColumnIndexWithAlternatives(headers, "第二希望時間帯", ["第二希望", "希望時間2", "第２希望"]),
-      ageGroup: getColumnIndexWithAlternatives(headers, "年代", ["年齢層", "年齢"])
+      preferredTime: getColumnIndexWithAlternatives(headers, "第一希望", ["第一希望時間帯", "希望時間1", "第１希望"]),
+      secondPreferredTime: getColumnIndexWithAlternatives(headers, "第二希望", ["第二希望時間帯", "希望時間2", "第２希望"]),
+      studyLineAlert: getColumnIndexWithAlternatives(headers, "学習LINE", ["学習ライン", "学習アラート"]),
+      officeLineAlert: getColumnIndexWithAlternatives(headers, "事務局LINE", ["事務局ライン", "事務局アラート"]),
+      supportAlert: getColumnIndexWithAlternatives(headers, "少サポ", ["少人数サポート", "サポート"]),
+      exitDate: getColumnIndexWithAlternatives(headers, "退会日", ["退会年月日", "脱会日"]),
+      teamConsideration: getColumnIndexWithAlternatives(headers, "チーム分け配慮", ["チーム配慮", "グループ配慮"])
     };
     
     // 必要なカラムが存在するか確認
-    const missingColumns = Object.entries(columnIndices)
-      .filter(([key, value]) => value === -1 && key !== 'ageGroup' && key !== 'secondPreferredTime') // 年代と第二希望は任意
-      .map(([key, value]) => key);
+    const essentialColumns = ["memberNumber", "name", "campStartDate", "pcSkills", "preferredTime"];
+    const missingColumns = essentialColumns
+      .filter(key => columnIndices[key] === -1)
+      .map(key => key);
     
     if (missingColumns.length > 0) {
       throw new Error("必要なカラムが見つかりません: " + missingColumns.join(", "));
@@ -178,6 +185,7 @@ function getUserInput() {
 
 /**
  * 会員データを取得し、指定した年月に一致するデータを抽出する関数
+ * 退会日が設定されていて、かつCamp開始日よりも前の日付の場合は除外する
  * @param {Array} values スプレッドシートの全データ
  * @param {Object} columnIndices 各カラムのインデックスを格納したオブジェクト
  * @param {Date} startDate 抽出基準となる年月の Date オブジェクト
@@ -190,25 +198,46 @@ function getMemberData(values, columnIndices, startDate) {
   for (let i = 1; i < values.length; i++) { // ヘッダー行をスキップ
     const row = values[i];
     const campStartDate = row[columnIndices.campStartDate];
+    const exitDate = columnIndices.exitDate !== -1 ? row[columnIndices.exitDate] : null;
+    
+    // 退会日が設定されていて、かつCamp開始日よりも前の場合はスキップ
+    if (exitDate instanceof Date && !isNaN(exitDate.getTime()) && 
+        campStartDate instanceof Date && !isNaN(campStartDate.getTime()) && 
+        exitDate < campStartDate) {
+      continue;
+    }
     
     // Camp開始日が有効な日付かつ指定した年月に一致するか確認
     if (campStartDate instanceof Date && !isNaN(campStartDate.getTime()) &&
         campStartDate.getFullYear() === startDate.getFullYear() &&
         campStartDate.getMonth() === startDate.getMonth()) {
       
-      // 年代の取得（シートから直接取得）
-      const ageGroup = columnIndices.ageGroup !== -1 ? row[columnIndices.ageGroup] || "不明" : getAgeGroup(row);
+      // 年代の取得
+      const ageGroup = columnIndices.ageGroup !== -1 ? row[columnIndices.ageGroup] || "不明" : "不明";
+      
+      // アラート情報の取得
+      const studyLineAlert = columnIndices.studyLineAlert !== -1 ? row[columnIndices.studyLineAlert] : "";
+      const officeLineAlert = columnIndices.officeLineAlert !== -1 ? row[columnIndices.officeLineAlert] : "";
+      const supportAlert = columnIndices.supportAlert !== -1 ? row[columnIndices.supportAlert] : "";
+      
+      // チーム分け配慮情報の取得
+      const teamConsideration = columnIndices.teamConsideration !== -1 ? row[columnIndices.teamConsideration] || "" : "";
       
       // 抽出するデータを整形
       targetData.push({
         name: row[columnIndices.name] || "",
         memberNumber: row[columnIndices.memberNumber] || "",
-        class: row[columnIndices.class] || "",
         campStartDate: campStartDate,
+        myRoadmap: columnIndices.myRoadmap !== -1 ? row[columnIndices.myRoadmap] || "" : "",
         pcSkills: row[columnIndices.pcSkills] || "",
         preferredTime: row[columnIndices.preferredTime] || "",
         secondPreferredTime: columnIndices.secondPreferredTime !== -1 ? row[columnIndices.secondPreferredTime] || "" : "",
         ageGroup: ageGroup,
+        studyLineAlert: studyLineAlert,
+        officeLineAlert: officeLineAlert,
+        supportAlert: supportAlert,
+        exitDate: exitDate, // 退会日情報
+        teamConsideration: teamConsideration, // チーム分け配慮情報を追加
         group: null, // グループ分け結果を格納するためのプロパティ
         skillScore: 0, // PCスキルスコア（初期値）
         skillGroup: "", // PCスキルグループ（初期値）
@@ -435,7 +464,7 @@ function groupMembers(memberData) {
   
   // メンバーデータがない場合は空のオブジェクトを返す
   if (!memberData || memberData.length === 0) {
-    return groups;
+    return groupedMembers;
   }
   
   // ===== ステップ1: 各メンバーのPCスキルをスコアリング =====
@@ -629,18 +658,6 @@ function groupMembers(memberData) {
 }
 
 /**
- * 年代を取得するバックアップ関数
- * 年代カラムがない場合に使用（実際の環境に合わせて実装が必要）
- * @param {Array} row データ行
- * @return {String} 年代（例: "20代", "30代"など）
- */
-function getAgeGroup(row) {
-  // 年代カラムが見つからない場合のバックアップ処理
-  // 以下は仮のロジック（実際の環境では他のデータから年代を推測する処理を実装）
-  return "不明";
-}
-
-/**
  * 結果をスプレッドシートに出力する関数
  * @param {Object} groupedMembers グループごとに分類されたメンバーのオブジェクト
  * @param {Date} startDate 処理対象の年月
@@ -659,8 +676,8 @@ function outputResults(groupedMembers, startDate, execDate) {
   // 新しいタブを作成
   let resultSheet = ss.insertSheet(tabName);
   
-  // ヘッダー行の設定 - 「割当時間帯」を削除
-  const headers = ["グループ名", "氏名", "会員番号", "クラス", "年代", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望時間帯", "第二希望時間帯"];
+  // ヘッダー行の設定 - 新しいデータを含む
+  const headers = ["グループ名", "氏名", "会員番号", "PCスキル", "PCスキルグループ", "特別スキル", "第一希望", "第二希望", "年代", "マイロードマップ", "学習LINE", "事務局LINE", "少サポ", "退会日", "チーム分け配慮"];
   resultSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   
   // 実行情報の設定
@@ -699,35 +716,98 @@ function outputResults(groupedMembers, startDate, execDate) {
     const members = groupedMembers[groupName];
     
     members.forEach(member => {
+      // デバッグログ: メンバーデータを確認
+      Logger.log(`メンバー出力: ${member.name} - チーム分け配慮: ${member.teamConsideration}`);
+      
       resultData.push([
         groupName,
         member.name,
         member.memberNumber,
-        member.class,
-        member.ageGroup,
         member.pcSkills || "",
         member.skillGroup || "",
         member.specialType || "",
         member.preferredTime || "",
-        member.secondPreferredTime || ""
-        // 「割当時間帯」の列を削除
+        member.secondPreferredTime || "",
+        member.ageGroup || "",
+        member.myRoadmap || "",
+        member.studyLineAlert || "",
+        member.officeLineAlert || "",
+        member.supportAlert || "",
+        member.exitDate instanceof Date ? Utilities.formatDate(member.exitDate, Session.getScriptTimeZone(), "yyyy/MM/dd") : "",
+        member.teamConsideration || ""
       ]);
     });
   });
   
   // データがある場合のみ出力
   if (resultData.length > 0) {
+    // デバッグログ: 結果データの最初の5行を確認
+    for (let i = 0; i < Math.min(5, resultData.length); i++) {
+      Logger.log(`結果データ ${i+1}行目: ${resultData[i]}`);
+      Logger.log(`チーム分け配慮列の値: ${resultData[i][14]}`);
+    }
+    
     resultSheet.getRange(2, 1, resultData.length, headers.length).setValues(resultData);
   }
   
   // フォーマットの設定
   resultSheet.getRange(1, 1, 1, headers.length).setBackground("#f3f3f3").setFontWeight("bold");
   infoRange.setBackground("#e6f2ff");
+  
+  // アラート値に応じてセルの色を変更
+  if (resultData.length > 0) {
+    // 学習LINE
+    const studyLineColumn = headers.indexOf("学習LINE") + 1;
+    if (studyLineColumn > 0) {
+      for (let i = 0; i < resultData.length; i++) {
+        const value = resultData[i][studyLineColumn - 1];
+        if (value == 3) {
+          resultSheet.getRange(i + 2, studyLineColumn).setBackground("#FF9999"); // 赤
+        } else if (value == 2) {
+          resultSheet.getRange(i + 2, studyLineColumn).setBackground("#FFCC99"); // オレンジ
+        } else if (value == 1) {
+          resultSheet.getRange(i + 2, studyLineColumn).setBackground("#FFFFCC"); // 黄色
+        }
+      }
+    }
+    
+    // 事務局LINE
+    const officeLineColumn = headers.indexOf("事務局LINE") + 1;
+    if (officeLineColumn > 0) {
+      for (let i = 0; i < resultData.length; i++) {
+        const value = resultData[i][officeLineColumn - 1];
+        if (value == 3) {
+          resultSheet.getRange(i + 2, officeLineColumn).setBackground("#FF9999"); // 赤
+        } else if (value == 2) {
+          resultSheet.getRange(i + 2, officeLineColumn).setBackground("#FFCC99"); // オレンジ
+        } else if (value == 1) {
+          resultSheet.getRange(i + 2, officeLineColumn).setBackground("#FFFFCC"); // 黄色
+        }
+      }
+    }
+    
+    // 少サポ
+    const supportColumn = headers.indexOf("少サポ") + 1;
+    if (supportColumn > 0) {
+      for (let i = 0; i < resultData.length; i++) {
+        const value = resultData[i][supportColumn - 1];
+        if (value == 3) {
+          resultSheet.getRange(i + 2, supportColumn).setBackground("#FF9999"); // 赤
+        } else if (value == 2) {
+          resultSheet.getRange(i + 2, supportColumn).setBackground("#FFCC99"); // オレンジ
+        } else if (value == 1) {
+          resultSheet.getRange(i + 2, supportColumn).setBackground("#FFFFCC"); // 黄色
+        }
+      }
+    }
+  }
+  
   resultSheet.autoResizeColumns(1, headers.length + 3);
   resultSheet.setFrozenRows(1);
   
   return tabName;
 }
+
 /**
  * 処理完了通知メールを送信する関数
  * @param {Date} startDate 処理対象の年月
@@ -764,6 +844,7 @@ function sendNotificationEmail(startDate, totalCount, groupedMembers, tabName) {
 ・対象年月: ${startDate.getFullYear()}年${startDate.getMonth() + 1}月
 ・対象データ数: ${totalCount}名
 ・グループサイズ: 最少4名、最大6名
+・退会日チェック: 退会日がCamp開始日より前の場合は除外
 
 ■ グループ分け結果サマリー
 ${groupSummary}
